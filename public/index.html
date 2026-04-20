@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Capsa King & Slave</title>
+  <title>Capsa Banting Online</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
@@ -14,9 +14,28 @@
     <div class="lobby-bg"></div>
     <div class="lobby-center">
       <h1 class="game-title">♠ CAPSA ♠</h1>
-      <p class="game-subtitle">King &amp; Slave</p>
+      <p class="game-subtitle">Banting Online</p>
+
       <div class="lobby-card">
         <input id="input-name" type="text" placeholder="Nama kamu..." maxlength="16" />
+
+        <!-- Mode selector -->
+        <div class="mode-selector">
+          <div class="mode-label">Pilih Mode:</div>
+          <div class="mode-btns">
+            <button class="mode-btn active" data-mode="normal">
+              <span class="mode-icon">🃏</span>
+              <span class="mode-name">Capsa Biasa</span>
+              <span class="mode-desc">Tanpa tukar kartu</span>
+            </button>
+            <button class="mode-btn" data-mode="king_slave">
+              <span class="mode-icon">👑</span>
+              <span class="mode-name">King &amp; Slave</span>
+              <span class="mode-desc">Tukar kartu tiap ronde</span>
+            </button>
+          </div>
+        </div>
+
         <div class="lobby-btns">
           <button id="btn-create" class="btn btn-gold">Buat Room</button>
           <div class="divider">atau</div>
@@ -36,6 +55,7 @@
       <span id="room-code-display" class="room-code"></span>
       <button id="btn-copy-code" class="btn-icon" title="Copy">📋</button>
     </div>
+    <div id="waiting-mode-badge"></div>
     <div class="waiting-players" id="waiting-players"></div>
     <div class="waiting-footer">
       <button id="btn-ready" class="btn btn-outline">Siap</button>
@@ -45,10 +65,8 @@
 
   <!-- ── GAME TABLE ── -->
   <div id="screen-game" class="screen">
-    <!-- Opponents -->
     <div id="opponents-area"></div>
 
-    <!-- Center table -->
     <div id="table-center">
       <div id="table-pile">
         <div id="last-play-area"></div>
@@ -56,7 +74,6 @@
       </div>
     </div>
 
-    <!-- My hand -->
     <div id="my-area">
       <div id="my-info">
         <span id="my-name-display"></span>
@@ -71,7 +88,6 @@
       <div id="combo-label"></div>
     </div>
 
-    <!-- Chat -->
     <div id="chat-panel">
       <div id="chat-messages"></div>
       <div id="chat-input-row">
@@ -80,11 +96,10 @@
       </div>
     </div>
 
-    <!-- Status toast -->
     <div id="toast"></div>
 
-    <!-- Top right controls -->
     <div id="game-controls">
+      <div id="game-mode-badge"></div>
       <button id="btn-game-leave" class="btn btn-ghost" style="font-size:0.75rem;padding:6px 12px;">🚪 Keluar</button>
     </div>
   </div>
