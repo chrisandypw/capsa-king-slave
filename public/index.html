@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Capsa King & Slave</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- ── LOBBY ── -->
+  <div id="screen-lobby" class="screen active">
+    <div class="lobby-bg"></div>
+    <div class="lobby-center">
+      <h1 class="game-title">♠ CAPSA ♠</h1>
+      <p class="game-subtitle">King &amp; Slave</p>
+      <div class="lobby-card">
+        <input id="input-name" type="text" placeholder="Nama kamu..." maxlength="16" />
+        <div class="lobby-btns">
+          <button id="btn-create" class="btn btn-gold">Buat Room</button>
+          <div class="divider">atau</div>
+          <div class="join-row">
+            <input id="input-room" type="text" placeholder="Kode Room" maxlength="5" />
+            <button id="btn-join" class="btn btn-outline">Masuk</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WAITING ROOM ── -->
+  <div id="screen-waiting" class="screen">
+    <div class="waiting-header">
+      <span class="room-label">Kode Room:</span>
+      <span id="room-code-display" class="room-code"></span>
+      <button id="btn-copy-code" class="btn-icon" title="Copy">📋</button>
+    </div>
+    <div class="waiting-players" id="waiting-players"></div>
+    <div class="waiting-footer">
+      <button id="btn-ready" class="btn btn-outline">Siap</button>
+      <button id="btn-start" class="btn btn-gold hidden">Mulai Game</button>
+    </div>
+  </div>
+
+  <!-- ── GAME TABLE ── -->
+  <div id="screen-game" class="screen">
+    <!-- Opponents -->
+    <div id="opponents-area"></div>
+
+    <!-- Center table -->
+    <div id="table-center">
+      <div id="table-pile">
+        <div id="last-play-area"></div>
+        <div id="table-info"></div>
+      </div>
+    </div>
+
+    <!-- My hand -->
+    <div id="my-area">
+      <div id="my-info">
+        <span id="my-name-display"></span>
+        <span id="my-badge"></span>
+      </div>
+      <div id="my-hand"></div>
+      <div id="action-bar">
+        <button id="btn-pass" class="btn btn-outline" disabled>Pass</button>
+        <button id="btn-play" class="btn btn-gold" disabled>Main</button>
+        <button id="btn-clear-sel" class="btn btn-ghost">Batal</button>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div id="chat-panel">
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Chat..." maxlength="80" />
+        <button id="btn-send-chat" class="btn-icon">➤</button>
+      </div>
+    </div>
+
+    <!-- Status toast -->
+    <div id="toast"></div>
+  </div>
+
+  <!-- ── ROUND END MODAL ── -->
+  <div id="modal-round-end" class="modal hidden">
+    <div class="modal-box">
+      <h2 id="modal-title">Ronde Selesai!</h2>
+      <div id="modal-positions"></div>
+      <div id="modal-scores"></div>
+      <button id="btn-next-round" class="btn btn-gold">Lanjut Ronde Berikutnya</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
