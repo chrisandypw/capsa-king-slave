@@ -390,6 +390,12 @@ input[type="text"]::placeholder { color: var(--text-dim); }
 }
 #toast.show { opacity: 1; }
 
+#game-controls {
+  position: absolute;
+  top: 12px; right: 12px;
+  z-index: 50;
+}
+
 /* Modal */
 .modal {
   position: fixed; inset: 0; z-index: 200;
