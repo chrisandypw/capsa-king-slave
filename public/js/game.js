@@ -212,11 +212,14 @@ function initSocket() {
     myIsHost = room.host === myId;
 
     if (room.state === 'waiting') {
+      showScreen('screen-waiting');
+      document.getElementById('room-code-display').textContent = room.id;
       renderWaiting();
     } else if (room.state === 'playing' || room.state === 'card_exchange') {
       showScreen('screen-game');
       renderAll();
     } else if (room.state === 'round_end') {
+      showScreen('screen-game');
       renderAll();
     }
   });
