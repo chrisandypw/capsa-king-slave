@@ -16,6 +16,56 @@ const SUIT_COLOR  = { d: 'red', c: 'black', h: 'red', s: 'black' };
 const POS_EMOJI   = { king: '👑', minister: '🤵', peasant: '🧑', slave: '🔗' };
 const POS_LABEL   = { king: 'Raja', minister: 'Menteri', peasant: 'Rakyat', slave: 'Budak' };
 
+const RANKS_ORDER = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+const SUITS_ORDER = ['d','c','h','s'];
+
+function cardVal(card) {
+  return RANKS_ORDER.indexOf(card.rank) * 4 + SUITS_ORDER.indexOf(card.suit);
+}
+function sortC(cards) { return [...cards].sort((a,b) => cardVal(a) - cardVal(b)); }
+
+function getComboTypeClient(cards) {
+  if (!cards || cards.length === 0) return null;
+  const n = cards.length;
+  const s = sortC(cards);
+
+  if (n === 1) return { type: 'single' };
+
+  if (n === 2) {
+    if (s[0].rank === s[1].rank) return { type: 'pair' };
+    return null;
+  }
+
+  if (n === 3) {
+    if (s[0].rank === s[1].rank && s[1].rank === s[2].rank) return { type: 'triple' };
+    return null;
+  }
+
+  if (n === 4) {
+    const rc = {};
+    s.forEach(c => rc[c.rank] = (rc[c.rank]||0)+1);
+    if (Object.values(rc).includes(4)) return { type: 'four_of_a_kind' };
+    return null;
+  }
+
+  if (n === 5) {
+    const rc = {};
+    s.forEach(c => rc[c.rank] = (rc[c.rank]||0)+1);
+    const counts = Object.values(rc).sort((a,b)=>b-a);
+    const rankIdxs = s.map(c => RANKS_ORDER.indexOf(c.rank)).sort((a,b)=>a-b);
+    const isFlush = s.every(c => c.suit === s[0].suit);
+    const isStraight = rankIdxs.every((r,i) => i===0 || r===rankIdxs[i-1]+1);
+
+    if (isFlush && isStraight) return { type: 'straight_flush' };
+    if (counts[0] === 4) return { type: 'bomb' };
+    if (counts[0] === 3 && counts[1] === 2) return { type: 'full_house' };
+    if (isFlush) return { type: 'flush' };
+    if (isStraight) return { type: 'straight' };
+    return null;
+  }
+  return null;
+}
+
 // ── Screens ───────────────────────────────────────────────────────────────────
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -37,7 +87,6 @@ function buildCard(card, opts = {}) {
     <div class="card-rank">${card.rank}</div>
     <div class="card-suit">${sym}</div>
     <div class="card-center">${sym}</div>
-    <div class="card-bottom"><div class="card-rank">${card.rank}</div><div class="card-suit">${sym}</div></div>
   `;
 
   if (selectable) {
@@ -81,6 +130,25 @@ function updateActionBar() {
     document.getElementById('my-hand').classList.add('my-turn-glow');
   } else {
     document.getElementById('my-hand').classList.remove('my-turn-glow');
+  }
+
+  // Show combo label for selected cards
+  const comboLabel_el = document.getElementById('combo-label');
+  if (comboLabel_el) {
+    if (hasSelection) {
+      const hand = (roomState && roomState.hands && roomState.hands[myId]) || [];
+      const selected = hand.filter(c => selectedCards.includes(c.id));
+      const combo = getComboTypeClient(selected);
+      if (combo) {
+        comboLabel_el.textContent = '✅ ' + comboLabel(combo.type);
+        comboLabel_el.style.color = 'var(--gold-light)';
+      } else {
+        comboLabel_el.textContent = '❌ Kombinasi tidak valid';
+        comboLabel_el.style.color = 'var(--red-light)';
+      }
+    } else {
+      comboLabel_el.textContent = '';
+    }
   }
 }
 
@@ -277,6 +345,13 @@ function initSocket() {
     renderAll();
   });
 
+  socket.on('game_ended', ({ scores }) => {
+    document.getElementById('modal-round-end').classList.add('hidden');
+    addChatSystem('Game diakhiri oleh host');
+    showToast('Game selesai — kembali ke lobby...');
+    setTimeout(() => showScreen('screen-waiting'), 1500);
+  });
+
   socket.on('error', ({ msg }) => {
     showToast('⚠️ ' + msg);
   });
@@ -293,6 +368,8 @@ function showRoundEnd(positions, finishOrder, scores) {
   const scoreDiv = document.getElementById('modal-scores');
 
   modal.classList.remove('hidden');
+  // Only host can end game
+  document.getElementById('btn-end-game').style.display = myIsHost ? '' : 'none';
 
   const posOrder = ['king', 'minister', 'peasant', 'slave'];
   posDiv.innerHTML = '';
@@ -427,6 +504,34 @@ document.getElementById('btn-next-round').addEventListener('click', () => {
   document.getElementById('modal-round-end').classList.add('hidden');
   socket.emit('ready_next_round');
 });
+
+document.getElementById('btn-end-game').addEventListener('click', () => {
+  if (!confirm('Akhiri game dan kembali ke waiting room?')) return;
+  document.getElementById('modal-round-end').classList.add('hidden');
+  socket.emit('end_game');
+});
+
+document.getElementById('btn-leave-room').addEventListener('click', () => {
+  if (!confirm('Keluar dari room?')) return;
+  document.getElementById('modal-round-end').classList.add('hidden');
+  leaveRoom();
+});
+
+document.getElementById('btn-game-leave').addEventListener('click', () => {
+  if (!confirm('Keluar dari game?')) return;
+  leaveRoom();
+});
+
+function leaveRoom() {
+  socket.emit('leave_room');
+  roomId = null;
+  roomState = null;
+  myIsHost = false;
+  selectedCards = [];
+  document.getElementById('input-name').value = myName;
+  document.getElementById('input-room').value = '';
+  showScreen('screen-lobby');
+}
 
 document.getElementById('btn-send-chat').addEventListener('click', sendChat);
 document.getElementById('chat-input').addEventListener('keydown', e => {
