@@ -285,7 +285,11 @@ input[type="text"]::placeholder { color: var(--text-dim); }
   position: relative; z-index: 1;
 }
 #table-pile {
-  min-width: 300px; min-height: 140px;
+  /* FIX: hapus min-width 300px yang terlalu lebar untuk mobile */
+  min-width: 0;
+  width: 90%;
+  max-width: 340px;
+  min-height: 140px;
   background: rgba(0,0,0,0.2);
   border: 2px solid rgba(201,146,42,0.25);
   border-radius: 24px;
@@ -300,6 +304,10 @@ input[type="text"]::placeholder { color: var(--text-dim); }
 #last-play-area {
   display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
   min-height: 96px; align-items: center;
+  /* FIX: izinkan scroll horizontal jika kartu terlalu banyak */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
 }
 #table-info {
   font-size: 0.8rem;
@@ -330,11 +338,16 @@ input[type="text"]::placeholder { color: var(--text-dim); }
 }
 #my-hand {
   display: flex;
+  /* FIX: nowrap + overflow-x agar kartu bisa di-scroll, tidak terpotong */
   flex-wrap: wrap;
   justify-content: center;
   gap: 0;
   min-height: var(--card-h);
   align-items: flex-end;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  padding-bottom: 4px;
 }
 #action-bar {
   display: flex; gap: 12px;
@@ -489,13 +502,96 @@ input[type="text"]::placeholder { color: var(--text-dim); }
   border-radius: 12px;
 }
 
-/* Responsive */
+/* ── Responsive / Mobile Fix ── */
 @media (max-width: 640px) {
-  :root { --card-w: 52px; --card-h: 74px; }
+  /* Perkecil ukuran kartu */
+  :root {
+    --card-w: 50px;
+    --card-h: 70px;
+  }
+
+  /* Sembunyikan chat, pakai full 1 kolom */
   #screen-game.active #chat-panel { display: none !important; }
   #screen-game.active {
     grid-template-columns: 1fr !important;
     grid-template-rows: auto 1fr auto !important;
+    overflow: hidden;
   }
-  .card { margin-left: -20px; }
+
+  /* Opponents lebih compact */
+  #opponents-area {
+    gap: 16px;
+    padding: 10px 8px 4px;
+  }
+  .card-back {
+    width: 34px;
+    height: 50px;
+    margin-left: -14px;
+    font-size: 0.9rem;
+  }
+
+  /* Table center: jangan sampai overflow layar */
+  #table-center {
+    padding: 0 8px;
+    overflow: hidden;
+  }
+  #table-pile {
+    min-height: 110px;
+    padding: 12px 10px;
+    gap: 8px;
+    border-radius: 16px;
+  }
+
+  /* Kartu yang dimainkan di tengah: scroll horizontal, jangan wrap */
+  #last-play-area {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    min-height: 80px;
+    padding: 4px 2px;
+    /* Sembunyikan scrollbar tapi tetap bisa di-scroll */
+    scrollbar-width: none;
+  }
+  #last-play-area::-webkit-scrollbar { display: none; }
+
+  /* Area kartu tangan saya */
+  #my-area {
+    padding: 6px 8px 14px;
+    gap: 6px;
+  }
+
+  /* Kartu tangan: satu baris, scroll horizontal */
+  #my-hand {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 0 4px 8px;
+    scrollbar-width: none;
+    /* Pastikan area kartu punya tinggi cukup untuk kartu yang diangkat */
+    min-height: calc(var(--card-h) + 24px);
+  }
+  #my-hand::-webkit-scrollbar { display: none; }
+
+  /* Overlap kartu sedikit lebih rapat */
+  .card { margin-left: -18px; }
+  .card:first-child { margin-left: 4px; }
+
+  /* Action bar */
+  #action-bar { gap: 8px; }
+  #action-bar .btn {
+    padding: 10px 14px;
+    font-size: 0.85rem;
+  }
+
+  /* Toast posisi lebih rendah di mobile */
+  #toast { bottom: 160px; font-size: 0.8rem; }
+
+  /* Modal lebih compact */
+  .modal-box {
+    padding: 24px 20px;
+    min-width: 0;
+    width: 92vw;
+  }
 }
