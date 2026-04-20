@@ -6,9 +6,19 @@ let socket;
 let myId = null;
 let myName = '';
 let roomId = null;
-let roomState = null; // full room object from server
-let selectedCards = []; // card ids
+let roomState = null;
+let selectedCards = [];
 let myIsHost = false;
+let selectedMode = 'normal'; // 'normal' | 'king_slave'
+
+// ── Mode selector buttons ──────────────────────────────────────────────────────
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedMode = btn.dataset.mode;
+  });
+});
 
 // ── Suit symbols & color ──────────────────────────────────────────────────────
 const SUIT_SYMBOL = { d: '♦', c: '♣', h: '♥', s: '♠' };
@@ -170,7 +180,8 @@ function renderOpponents() {
   opponents.forEach(p => {
     const count = (roomState.allHandCounts && roomState.allHandCounts[p.id]) || 0;
     const isActive = roomState.currentTurn === p.id;
-    const badge = roomState.positions && roomState.positions[p.id]
+    const isKS = roomState.mode === 'king_slave';
+    const badge = (isKS && roomState.positions && roomState.positions[p.id])
       ? POS_EMOJI[roomState.positions[p.id]] + ' ' + POS_LABEL[roomState.positions[p.id]]
       : '';
 
@@ -219,10 +230,14 @@ function renderMyInfo() {
   const me = roomState.players.find(p => p.id === myId);
   if (!me) return;
   document.getElementById('my-name-display').textContent = me.name;
-  const badge = roomState.positions && roomState.positions[myId]
+  const isKS = roomState.mode === 'king_slave';
+  const badge = (isKS && roomState.positions && roomState.positions[myId])
     ? POS_EMOJI[roomState.positions[myId]] + ' ' + POS_LABEL[roomState.positions[myId]]
     : '';
   document.getElementById('my-badge').textContent = badge;
+
+  const gmb = document.getElementById('game-mode-badge');
+  if (gmb) gmb.textContent = isKS ? '👑 King & Slave' : '🃏 Capsa Biasa';
 }
 
 function renderAll() {
@@ -238,6 +253,14 @@ function renderWaiting() {
   if (!roomState) return;
   const container = document.getElementById('waiting-players');
   container.innerHTML = '';
+
+  // Mode badge
+  const modeBadge = document.getElementById('waiting-mode-badge');
+  if (modeBadge) {
+    const isKS = roomState.mode === 'king_slave';
+    modeBadge.textContent = isKS ? '👑 Mode King & Slave' : '🃏 Mode Capsa Biasa';
+    modeBadge.style.display = '';
+  }
 
   for (let i = 0; i < 4; i++) {
     const slot = document.createElement('div');
@@ -330,8 +353,8 @@ function initSocket() {
     addChatSystem(`${name} selesai — ${pos}`);
   });
 
-  socket.on('round_end', ({ positions, finishOrder, scores }) => {
-    showRoundEnd(positions, finishOrder, scores);
+  socket.on('round_end', ({ positions, finishOrder, scores, mode }) => {
+    showRoundEnd(positions, finishOrder, scores, mode);
   });
 
   socket.on('player_joined', ({ name }) => {
@@ -362,38 +385,61 @@ function initSocket() {
 }
 
 // ── Round End Modal ────────────────────────────────────────────────────────────
-function showRoundEnd(positions, finishOrder, scores) {
+function showRoundEnd(positions, finishOrder, scores, mode) {
   const modal = document.getElementById('modal-round-end');
   const posDiv = document.getElementById('modal-positions');
   const scoreDiv = document.getElementById('modal-scores');
+  const isKS = mode === 'king_slave';
 
+  document.getElementById('modal-title').textContent = isKS ? 'Ronde Selesai! 👑' : 'Ronde Selesai! 🃏';
   modal.classList.remove('hidden');
-  // Only host can end game
   document.getElementById('btn-end-game').style.display = myIsHost ? '' : 'none';
+  // Hide next round btn label based on mode
+  document.getElementById('btn-next-round').textContent = isKS
+    ? 'Lanjut (Tukar Kartu) ▶'
+    : 'Lanjut Ronde Berikutnya ▶';
 
   const posOrder = ['king', 'minister', 'peasant', 'slave'];
   posDiv.innerHTML = '';
-  posOrder.forEach(pos => {
-    const pid = Object.keys(positions).find(id => positions[id] === pos);
-    if (!pid) return;
-    const name = getPlayerName(pid);
-    const row = document.createElement('div');
-    row.className = `pos-row ${pos}`;
-    row.innerHTML = `
-      <span class="pos-crown">${POS_EMOJI[pos]}</span>
-      <span class="pos-name">${escHtml(name)}${pid === myId ? ' (Kamu)' : ''}</span>
-      <span class="pos-label">${POS_LABEL[pos]}</span>
-    `;
-    posDiv.appendChild(row);
-  });
 
-  scoreDiv.innerHTML = '<strong style="color:var(--text-dim);letter-spacing:0.1em;font-size:0.8rem">SKOR TOTAL</strong>';
+  if (isKS) {
+    posOrder.forEach(pos => {
+      const pid = Object.keys(positions).find(id => positions[id] === pos);
+      if (!pid) return;
+      const name = getPlayerName(pid);
+      const row = document.createElement('div');
+      row.className = `pos-row ${pos}`;
+      row.innerHTML = `
+        <span class="pos-crown">${POS_EMOJI[pos]}</span>
+        <span class="pos-name">${escHtml(name)}${pid === myId ? ' (Kamu)' : ''}</span>
+        <span class="pos-label">${POS_LABEL[pos]}</span>
+      `;
+      posDiv.appendChild(row);
+    });
+  } else {
+    // Normal mode: show finish order
+    finishOrder.forEach((pid, i) => {
+      const name = getPlayerName(pid);
+      const medals = ['🥇', '🥈', '🥉', '4️⃣'];
+      const row = document.createElement('div');
+      row.className = `pos-row${i === 0 ? ' king' : i === finishOrder.length - 1 ? ' slave' : ''}`;
+      row.innerHTML = `
+        <span class="pos-crown">${medals[i] || (i+1)+'.'}</span>
+        <span class="pos-name">${escHtml(name)}${pid === myId ? ' (Kamu)' : ''}</span>
+        <span class="pos-label">${i === 0 ? 'Menang!' : 'Selesai ke-'+(i+1)}</span>
+      `;
+      posDiv.appendChild(row);
+    });
+  }
+
+  scoreDiv.innerHTML = `<strong style="color:var(--text-dim);letter-spacing:0.1em;font-size:0.8rem">${isKS ? 'SKOR TOTAL' : 'TOTAL MENANG'}</strong>`;
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   sorted.forEach(([pid, score]) => {
     const name = getPlayerName(pid);
     const row = document.createElement('div');
     row.className = 'score-row';
-    row.innerHTML = `<span>${escHtml(name)}</span><span class="score-val ${score >= 0 ? 'pos' : 'neg'}">${score >= 0 ? '+' : ''}${score}</span>`;
+    const label = isKS ? (score >= 0 ? '+' : '') + score : score + ' menang';
+    row.innerHTML = `<span>${escHtml(name)}</span><span class="score-val ${score >= 0 ? 'pos' : 'neg'}">${label}</span>`;
     scoreDiv.appendChild(row);
   });
 }
@@ -452,7 +498,7 @@ document.getElementById('btn-create').addEventListener('click', () => {
   const name = document.getElementById('input-name').value.trim();
   if (!name) { showToast('Masukkan nama dulu!'); return; }
   myName = name;
-  socket.emit('create_room', { name });
+  socket.emit('create_room', { name, mode: selectedMode });
 });
 
 document.getElementById('btn-join').addEventListener('click', () => {
