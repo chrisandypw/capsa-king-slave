@@ -30,8 +30,10 @@ html, body {
 }
 
 /* ── Screens ── */
-.screen { position: absolute; inset: 0; display: none; }
-.screen.active { display: flex; }
+.screen { position: absolute; inset: 0; display: none !important; }
+.screen.active { display: flex !important; }
+.screen.active#screen-game { display: grid !important; }
+.screen.active#screen-waiting { display: flex !important; }
 
 /* ── Lobby ── */
 #screen-lobby {
@@ -180,7 +182,6 @@ input[type="text"]::placeholder { color: var(--text-dim); }
 
 /* ── Game Table ── */
 #screen-game {
-  display: grid;
   grid-template-rows: auto 1fr auto;
   grid-template-columns: 1fr 280px;
   background: radial-gradient(ellipse at 50% 50%, #1d5233 0%, var(--green-dark) 70%);
@@ -441,10 +442,10 @@ input[type="text"]::placeholder { color: var(--text-dim); }
 /* Responsive */
 @media (max-width: 640px) {
   :root { --card-w: 52px; --card-h: 74px; }
-  #chat-panel { display: none; }
-  #screen-game {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr auto;
+  #screen-game.active #chat-panel { display: none !important; }
+  #screen-game.active {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto 1fr auto !important;
   }
   .card { margin-left: -20px; }
 }
