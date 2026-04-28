@@ -31,14 +31,19 @@ function createDeck() {
 
 function shuffle(deck) {
   const d = [...deck];
-  for (let i = d.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [d[i], d[j]] = [d[j], d[i]];
+  // Fisher-Yates 3x untuk randomness lebih baik
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = d.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [d[i], d[j]] = [d[j], d[i]];
+    }
   }
   return d;
 }
 
 function deal(deck, n) {
+  // deck sudah di-shuffle sebelum dipanggil
+  // distribusi kartu benar-benar acak karena urutannya random
   const hands = Array.from({ length: n }, () => []);
   deck.forEach((c, i) => hands[i % n].push(c));
   return hands.map(sortCards);
