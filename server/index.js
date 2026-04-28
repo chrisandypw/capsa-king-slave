@@ -42,10 +42,42 @@ function shuffle(deck) {
 }
 
 function deal(deck, n) {
-  // deck sudah di-shuffle sebelum dipanggil
-  // distribusi kartu benar-benar acak karena urutannya random
-  const hands = Array.from({ length: n }, () => []);
-  deck.forEach((c, i) => hands[i % n].push(c));
+  // Shuffle berkali-kali dulu
+  let d = [...deck];
+  for (let pass = 0; pass < 7; pass++) {
+    for (let i = d.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [d[i], d[j]] = [d[j], d[i]];
+    }
+  }
+
+  // Bagi kartu secara random: setiap pemain dapat tepat 13 kartu
+  // dengan cara ambil posisi random dari deck yang sudah dikocok
+  const totalCards = 52;
+  const perPlayer  = Math.floor(totalCards / n);
+  const hands      = Array.from({ length: n }, () => []);
+
+  // Buat array index acak 0..51, lalu assign ke pemain
+  const indices = Array.from({ length: totalCards }, (_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  // Tiap pemain ambil perPlayer kartu dari posisi random
+  indices.forEach((cardIdx, i) => {
+    const player = Math.floor(i / perPlayer);
+    if (player < n) hands[player].push(d[cardIdx]);
+  });
+
+  // Sisa kartu (jika 52 tidak habis dibagi n) dibagi random
+  const leftover = totalCards % n;
+  if (leftover > 0) {
+    const usedCount = n * perPlayer;
+    const remaining = indices.slice(usedCount);
+    remaining.forEach((cardIdx, i) => hands[i % n].push(d[cardIdx]));
+  }
+
   return hands.map(sortCards);
 }
 
