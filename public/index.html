@@ -9,62 +9,46 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <!-- ── LOBBY ── -->
+
+  <!-- ── LOBBY ─────────────────────────────────────────────────────────────── -->
   <div id="screen-lobby" class="screen active">
     <div class="lobby-bg"></div>
     <div class="lobby-center">
       <h1 class="game-title">♠ CAPSA ♠</h1>
       <p class="game-subtitle">Banting Online</p>
-
       <div class="lobby-card">
-        <input id="input-name" type="text" placeholder="Nama kamu..." maxlength="16" />
-
-        <!-- Mode selector -->
-        <div class="mode-selector">
-          <div class="mode-label">Pilih Mode:</div>
-          <div class="mode-btns">
-            <button class="mode-btn active" data-mode="normal">
-              <span class="mode-icon">🃏</span>
-              <span class="mode-name">Capsa Biasa</span>
-              <span class="mode-desc">Tanpa tukar kartu</span>
-            </button>
-            <button class="mode-btn" data-mode="king_slave">
-              <span class="mode-icon">👑</span>
-              <span class="mode-name">King &amp; Slave</span>
-              <span class="mode-desc">Tukar kartu tiap ronde</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="lobby-btns">
-          <button id="btn-create" class="btn btn-gold">Buat Room</button>
-          <div class="divider">atau</div>
-          <div class="join-row">
-            <input id="input-room" type="text" placeholder="Kode Room" maxlength="5" />
-            <button id="btn-join" class="btn btn-outline">Masuk</button>
-          </div>
+        <input id="input-name" type="text" placeholder="Nama kamu..." maxlength="16" autocomplete="off" />
+        <button id="btn-create" class="btn btn-gold">Buat Room</button>
+        <div class="divider">atau masuk room yang ada</div>
+        <div class="join-row">
+          <input id="input-room" type="text" placeholder="Kode Room" maxlength="5" autocomplete="off" />
+          <button id="btn-join" class="btn btn-outline">Masuk</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ── WAITING ROOM ── -->
+  <!-- ── WAITING ROOM ───────────────────────────────────────────────────────── -->
   <div id="screen-waiting" class="screen">
-    <div class="waiting-header">
-      <span class="room-label">Kode Room:</span>
-      <span id="room-code-display" class="room-code"></span>
-      <button id="btn-copy-code" class="btn-icon" title="Copy">📋</button>
+    <div class="waiting-top">
+      <div class="waiting-header">
+        <span class="room-label">Kode Room</span>
+        <span id="room-code-display" class="room-code"></span>
+        <button id="btn-copy-code" class="btn-icon" title="Salin kode">📋</button>
+      </div>
+      <p class="waiting-hint">Bagikan kode ini ke teman-temanmu</p>
     </div>
-    <div id="waiting-mode-badge"></div>
-    <div class="waiting-players" id="waiting-players"></div>
+    <div id="waiting-players" class="waiting-players"></div>
     <div class="waiting-footer">
-      <button id="btn-ready" class="btn btn-outline">Siap</button>
-      <button id="btn-start" class="btn btn-gold hidden">Mulai Game</button>
+      <button id="btn-ready" class="btn btn-outline">Siap ✓</button>
+      <button id="btn-start" class="btn btn-gold hidden">▶ Mulai Game</button>
+      <button id="btn-waiting-leave" class="btn btn-ghost">Keluar</button>
     </div>
   </div>
 
-  <!-- ── GAME TABLE ── -->
+  <!-- ── GAME ───────────────────────────────────────────────────────────────── -->
   <div id="screen-game" class="screen">
+
     <div id="opponents-area"></div>
 
     <div id="table-center">
@@ -80,41 +64,49 @@
         <span id="my-badge"></span>
       </div>
       <div id="my-hand"></div>
+      <div id="combo-label"></div>
       <div id="action-bar">
         <button id="btn-pass" class="btn btn-outline" disabled>Pass</button>
-        <button id="btn-play" class="btn btn-gold" disabled>Main</button>
+        <button id="btn-play" class="btn btn-gold" disabled>Main ▶</button>
         <button id="btn-clear-sel" class="btn btn-ghost">Batal</button>
       </div>
-      <div id="combo-label"></div>
     </div>
 
     <div id="chat-panel">
       <div id="chat-messages"></div>
       <div id="chat-input-row">
-        <input id="chat-input" type="text" placeholder="Chat..." maxlength="80" />
+        <input id="chat-input" type="text" placeholder="Chat..." maxlength="80" autocomplete="off" />
         <button id="btn-send-chat" class="btn-icon">➤</button>
       </div>
     </div>
 
-    <div id="toast"></div>
-
     <div id="game-controls">
-      <div id="game-mode-badge"></div>
-      <button id="btn-game-leave" class="btn btn-ghost" style="font-size:0.75rem;padding:6px 12px;">🚪 Keluar</button>
+      <button id="btn-game-leave" class="btn btn-ghost btn-sm">🚪 Keluar</button>
     </div>
+
+    <div id="toast"></div>
   </div>
 
-  <!-- ── ROUND END MODAL ── -->
+  <!-- ── ROUND END MODAL ────────────────────────────────────────────────────── -->
   <div id="modal-round-end" class="modal hidden">
     <div class="modal-box">
       <h2 id="modal-title">Ronde Selesai!</h2>
       <div id="modal-positions"></div>
       <div id="modal-scores"></div>
-      <button id="btn-next-round" class="btn btn-gold">Lanjut Ronde Berikutnya</button>
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:4px;">
-        <button id="btn-end-game" class="btn btn-outline" style="font-size:0.8rem;padding:8px 16px;">⛔ Akhiri Game</button>
-        <button id="btn-leave-room" class="btn btn-ghost" style="font-size:0.8rem;padding:8px 16px;">🚪 Keluar Room</button>
+      <div class="modal-actions">
+        <button id="btn-next-round" class="btn btn-gold">Lanjut Ronde ▶</button>
+        <button id="btn-end-game" class="btn btn-outline hidden">⛔ Akhiri Game</button>
+        <button id="btn-leave-room" class="btn btn-ghost">🚪 Keluar Room</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ── RECONNECTING OVERLAY ───────────────────────────────────────────────── -->
+  <div id="overlay-reconnect" class="overlay hidden">
+    <div class="overlay-box">
+      <div class="spinner"></div>
+      <p class="overlay-title">Menyambung kembali...</p>
+      <p class="overlay-sub">Jangan tutup tab ini</p>
     </div>
   </div>
 
