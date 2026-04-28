@@ -1,107 +1,86 @@
+'use strict';
+
 // ── Config ────────────────────────────────────────────────────────────────────
-const SERVER_URL = window.location.origin; // same origin when deployed
+const SERVER_URL = window.location.origin;
+const SESSION_KEY = 'capsa_sid';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let socket;
-let myId = null;
-let myName = '';
-let roomId = null;
-let roomState = null;
-let selectedCards = [];
-let myIsHost = false;
-let selectedMode = 'normal'; // 'normal' | 'king_slave'
+let mySid   = null;   // session id (persistent)
+let myId    = null;   // socket.id (changes on reconnect)
+let myName  = '';
+let roomId  = null;
+let room    = null;   // latest room_update snapshot
+let selected = [];    // card ids selected
 
-// ── Mode selector buttons ──────────────────────────────────────────────────────
-document.querySelectorAll('.mode-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    selectedMode = btn.dataset.mode;
-  });
-});
+// ── Session storage ───────────────────────────────────────────────────────────
+const getSid  = () => localStorage.getItem(SESSION_KEY);
+const saveSid = sid => localStorage.setItem(SESSION_KEY, sid);
+const clearSid = () => localStorage.removeItem(SESSION_KEY);
 
-// ── Suit symbols & color ──────────────────────────────────────────────────────
-const SUIT_SYMBOL = { d: '♦', c: '♣', h: '♥', s: '♠' };
-const SUIT_COLOR  = { d: 'red', c: 'black', h: 'red', s: 'black' };
-const POS_EMOJI   = { king: '👑', minister: '🤵', peasant: '🧑', slave: '🔗' };
-const POS_LABEL   = { king: 'Raja', minister: 'Menteri', peasant: 'Rakyat', slave: 'Budak' };
+// ── Card constants ────────────────────────────────────────────────────────────
+const SUIT_SYM   = { d:'♦', c:'♣', h:'♥', s:'♠' };
+const SUIT_COLOR = { d:'red', c:'black', h:'red', s:'black' };
+const RANKS      = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+const SUITS      = ['d','c','h','s'];
+const cardVal    = c => RANKS.indexOf(c.rank) * 4 + SUITS.indexOf(c.suit);
+const sortC      = cs => [...cs].sort((a,b) => cardVal(a) - cardVal(b));
 
-const RANKS_ORDER = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
-const SUITS_ORDER = ['d','c','h','s'];
-
-function cardVal(card) {
-  return RANKS_ORDER.indexOf(card.rank) * 4 + SUITS_ORDER.indexOf(card.suit);
-}
-function sortC(cards) { return [...cards].sort((a,b) => cardVal(a) - cardVal(b)); }
-
-function getComboTypeClient(cards) {
-  if (!cards || cards.length === 0) return null;
+// ── Combo detection (client-side for label) ───────────────────────────────────
+function detectCombo(cards) {
+  if (!cards || !cards.length) return null;
   const n = cards.length;
   const s = sortC(cards);
-
-  if (n === 1) return { type: 'single' };
-
-  if (n === 2) {
-    if (s[0].rank === s[1].rank) return { type: 'pair' };
-    return null;
-  }
-
-  if (n === 3) {
-    if (s[0].rank === s[1].rank && s[1].rank === s[2].rank) return { type: 'triple' };
-    return null;
-  }
-
+  if (n === 1) return 'single';
+  if (n === 2) return s[0].rank === s[1].rank ? 'pair' : null;
+  if (n === 3) return (s[0].rank === s[1].rank && s[1].rank === s[2].rank) ? 'triple' : null;
   if (n === 4) {
     const rc = {};
     s.forEach(c => rc[c.rank] = (rc[c.rank]||0)+1);
-    if (Object.values(rc).includes(4)) return { type: 'four_of_a_kind' };
-    return null;
+    return Object.values(rc).includes(4) ? 'four_of_a_kind' : null;
   }
-
   if (n === 5) {
     const rc = {};
     s.forEach(c => rc[c.rank] = (rc[c.rank]||0)+1);
     const counts = Object.values(rc).sort((a,b)=>b-a);
-    const rankIdxs = s.map(c => RANKS_ORDER.indexOf(c.rank)).sort((a,b)=>a-b);
+    const ri = s.map(c => RANKS.indexOf(c.rank)).sort((a,b)=>a-b);
     const isFlush = s.every(c => c.suit === s[0].suit);
-    const isStraight = rankIdxs.every((r,i) => i===0 || r===rankIdxs[i-1]+1);
-
-    if (isFlush && isStraight) return { type: 'straight_flush' };
-    if (counts[0] === 4) return { type: 'bomb' };
-    if (counts[0] === 3 && counts[1] === 2) return { type: 'full_house' };
-    if (isFlush) return { type: 'flush' };
-    if (isStraight) return { type: 'straight' };
+    const isStraight = ri.every((r,i) => i===0 || r===ri[i-1]+1);
+    if (isFlush && isStraight) return 'straight_flush';
+    if (counts[0] === 4) return 'bomb';
+    if (counts[0] === 3 && counts[1] === 2) return 'full_house';
+    if (isFlush) return 'flush';
+    if (isStraight) return 'straight';
     return null;
   }
   return null;
 }
 
-// ── Screens ───────────────────────────────────────────────────────────────────
+const COMBO_LABEL = {
+  single:'Kartu Tunggal', pair:'Pasangan', triple:'Tiga Sejenis',
+  straight:'Straight', flush:'Flush', full_house:'Full House',
+  four_of_a_kind:'Four of a Kind', bomb:'Bom 💣', straight_flush:'Straight Flush 🔥'
+};
+const POS_EMOJI = { king:'🥇', minister:'🥈', peasant:'🥉', slave:'4️⃣' };
+const POS_LABEL = { king:'Menang', minister:'2nd', peasant:'3rd', slave:'Kalah' };
+
+// ── Screen management ─────────────────────────────────────────────────────────
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
 
-// ── Card Rendering ─────────────────────────────────────────────────────────────
-function buildCard(card, opts = {}) {
-  const { selectable = false, played = false } = opts;
-  const color = SUIT_COLOR[card.suit];
-  const sym   = SUIT_SYMBOL[card.suit];
-  const isSelected = selectedCards.includes(card.id);
-
+// ── Card rendering ────────────────────────────────────────────────────────────
+function buildCard(card, { selectable = false, played = false } = {}) {
   const el = document.createElement('div');
-  el.className = `card ${color}${played ? ' card-played' : ''}${isSelected ? ' selected' : ''}`;
+  el.className = `card ${SUIT_COLOR[card.suit]}${played ? ' card-played' : ''}${selected.includes(card.id) ? ' selected' : ''}`;
   el.dataset.id = card.id;
-
   el.innerHTML = `
     <div class="card-rank">${card.rank}</div>
-    <div class="card-suit">${sym}</div>
-    <div class="card-center">${sym}</div>
+    <div class="card-suit">${SUIT_SYM[card.suit]}</div>
+    <div class="card-center">${SUIT_SYM[card.suit]}</div>
   `;
-
-  if (selectable) {
-    el.addEventListener('click', () => toggleCard(card.id));
-  }
+  if (selectable) el.addEventListener('click', () => toggleCard(card.id));
   return el;
 }
 
@@ -112,163 +91,133 @@ function buildBackCard() {
   return el;
 }
 
-// ── Card Selection ─────────────────────────────────────────────────────────────
-function toggleCard(cardId) {
-  if (!roomState || roomState.currentTurn !== myId) return;
-  const idx = selectedCards.indexOf(cardId);
-  if (idx === -1) selectedCards.push(cardId);
-  else selectedCards.splice(idx, 1);
-  renderMyHand();
-  updateActionBar();
+// ── Selection ─────────────────────────────────────────────────────────────────
+function toggleCard(id) {
+  if (!room || room.currentTurn !== mySid) return;
+  const idx = selected.indexOf(id);
+  idx === -1 ? selected.push(id) : selected.splice(idx, 1);
+  renderHand();
+  renderComboLabel();
+  updateButtons();
 }
 
 function clearSelection() {
-  selectedCards = [];
-  renderMyHand();
-  updateActionBar();
+  selected = [];
+  renderHand();
+  renderComboLabel();
+  updateButtons();
 }
 
-function updateActionBar() {
-  const isMyTurn = roomState && roomState.currentTurn === myId;
-  const hasSelection = selectedCards.length > 0;
-  const hasLastPlay = roomState && roomState.lastPlay && roomState.lastPlay.length > 0;
-
-  document.getElementById('btn-play').disabled = !isMyTurn || !hasSelection;
-  document.getElementById('btn-pass').disabled = !isMyTurn || !hasLastPlay;
-
-  if (isMyTurn) {
-    document.getElementById('my-hand').classList.add('my-turn-glow');
-  } else {
-    document.getElementById('my-hand').classList.remove('my-turn-glow');
-  }
-
-  // Show combo label for selected cards
-  const comboLabel_el = document.getElementById('combo-label');
-  if (comboLabel_el) {
-    if (hasSelection) {
-      const hand = (roomState && roomState.hands && roomState.hands[myId]) || [];
-      const selected = hand.filter(c => selectedCards.includes(c.id));
-      const combo = getComboTypeClient(selected);
-      if (combo) {
-        comboLabel_el.textContent = '✅ ' + comboLabel(combo.type);
-        comboLabel_el.style.color = 'var(--gold-light)';
-      } else {
-        comboLabel_el.textContent = '❌ Kombinasi tidak valid';
-        comboLabel_el.style.color = 'var(--red-light)';
-      }
-    } else {
-      comboLabel_el.textContent = '';
-    }
-  }
-}
-
-// ── Render Functions ───────────────────────────────────────────────────────────
-function renderMyHand() {
-  if (!roomState) return;
-  const hand = (roomState.hands && roomState.hands[myId]) || [];
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderHand() {
   const el = document.getElementById('my-hand');
   el.innerHTML = '';
-  hand.forEach(card => el.appendChild(buildCard(card, { selectable: true })));
+  (room?.myHand || []).forEach(c => el.appendChild(buildCard(c, { selectable: true })));
 }
 
 function renderOpponents() {
-  if (!roomState) return;
   const area = document.getElementById('opponents-area');
   area.innerHTML = '';
+  if (!room) return;
 
-  const opponents = roomState.players.filter(p => p.id !== myId);
-  opponents.forEach(p => {
-    const count = (roomState.allHandCounts && roomState.allHandCounts[p.id]) || 0;
-    const isActive = roomState.currentTurn === p.id;
-    const isKS = roomState.mode === 'king_slave';
-    const badge = (isKS && roomState.positions && roomState.positions[p.id])
-      ? POS_EMOJI[roomState.positions[p.id]] + ' ' + POS_LABEL[roomState.positions[p.id]]
-      : '';
-
+  room.players.filter(p => p.sid !== mySid).forEach(p => {
+    const count   = room.allHandCounts?.[p.sid] ?? 0;
+    const isMyTurn = room.currentTurn === p.sid;
     const block = document.createElement('div');
-    block.className = `opponent-block${isActive ? ' active-turn' : ''}`;
-    block.innerHTML = `
-      <div class="opponent-name">${escHtml(p.name)}${isActive ? ' 🎯' : ''}</div>
-      ${badge ? `<div class="opponent-badge">${badge}</div>` : ''}
-    `;
+    block.className = `opponent-block${isMyTurn ? ' active-glow' : ''}`;
 
     const handEl = document.createElement('div');
     handEl.className = 'opponent-hand';
     const show = Math.min(count, 13);
     for (let i = 0; i < show; i++) handEl.appendChild(buildBackCard());
-    block.appendChild(handEl);
 
-    const countEl = document.createElement('div');
-    countEl.style.cssText = 'font-size:0.75rem;color:var(--text-dim);margin-top:2px;';
-    countEl.textContent = count + ' kartu';
-    block.appendChild(countEl);
+    block.innerHTML = `<div class="opponent-name">${esc(p.name)}${isMyTurn ? ' 🎯' : ''}</div>`;
+    block.appendChild(handEl);
+    block.innerHTML += `<div class="opponent-count">${count} kartu</div>`;
+    // re-append handEl properly
+    block.innerHTML = '';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'opponent-name';
+    nameEl.textContent = p.name + (isMyTurn ? ' 🎯' : '');
+    block.appendChild(nameEl);
+    block.appendChild(handEl);
+    const cntEl = document.createElement('div');
+    cntEl.className = 'opponent-count';
+    cntEl.textContent = count + ' kartu';
+    block.appendChild(cntEl);
 
     area.appendChild(block);
   });
 }
 
-function renderLastPlay() {
-  if (!roomState) return;
+function renderTable() {
   const area = document.getElementById('last-play-area');
   const info = document.getElementById('table-info');
   area.innerHTML = '';
-
-  const lastPlay = roomState.lastPlay || [];
-  if (lastPlay.length === 0) {
+  if (!room?.lastPlay?.length) {
     info.textContent = 'Meja kosong — mainkan kartu pertama';
     return;
   }
-
-  lastPlay.forEach(card => area.appendChild(buildCard(card, { played: true })));
-
-  const playerName = roomState.players.find(p => p.id === roomState.lastPlayerId)?.name || '?';
-  info.textContent = `${playerName} main`;
+  room.lastPlay.forEach(c => area.appendChild(buildCard(c, { played: true })));
+  const who = room.players.find(p => p.sid === room.lastPlayerId)?.name || '?';
+  info.textContent = who + ' main';
 }
 
 function renderMyInfo() {
-  if (!roomState) return;
-  const me = roomState.players.find(p => p.id === myId);
-  if (!me) return;
-  document.getElementById('my-name-display').textContent = me.name;
-  const isKS = roomState.mode === 'king_slave';
-  const badge = (isKS && roomState.positions && roomState.positions[myId])
-    ? POS_EMOJI[roomState.positions[myId]] + ' ' + POS_LABEL[roomState.positions[myId]]
-    : '';
-  document.getElementById('my-badge').textContent = badge;
+  const me = room?.players.find(p => p.sid === mySid);
+  document.getElementById('my-name-display').textContent = me?.name || myName;
+  const pos = room?.positions?.[mySid];
+  document.getElementById('my-badge').textContent = pos ? POS_EMOJI[pos] + ' ' + POS_LABEL[pos] : '';
+}
 
-  const gmb = document.getElementById('game-mode-badge');
-  if (gmb) gmb.textContent = isKS ? '👑 King & Slave' : '🃏 Capsa Biasa';
+function renderComboLabel() {
+  const el = document.getElementById('combo-label');
+  if (!selected.length) { el.textContent = ''; return; }
+  const hand = room?.myHand || [];
+  const cards = hand.filter(c => selected.includes(c.id));
+  const type = detectCombo(cards);
+  if (type) {
+    el.textContent = '✅ ' + (COMBO_LABEL[type] || type);
+    el.style.color = 'var(--gold-light)';
+  } else {
+    el.textContent = '❌ Kombinasi tidak valid';
+    el.style.color = 'var(--red-light)';
+  }
+}
+
+function updateButtons() {
+  const isMyTurn   = room?.currentTurn === mySid;
+  const hasLastPlay = !!room?.lastPlay?.length;
+  document.getElementById('btn-play').disabled  = !isMyTurn || !selected.length;
+  document.getElementById('btn-pass').disabled  = !isMyTurn || !hasLastPlay;
+  const hand = document.getElementById('my-hand');
+  hand.classList.toggle('my-turn-glow', !!isMyTurn);
 }
 
 function renderAll() {
-  renderMyHand();
+  renderHand();
   renderOpponents();
-  renderLastPlay();
+  renderTable();
   renderMyInfo();
-  updateActionBar();
+  renderComboLabel();
+  updateButtons();
 }
 
-// ── Waiting Room ───────────────────────────────────────────────────────────────
 function renderWaiting() {
-  if (!roomState) return;
+  if (!room) return;
+  document.getElementById('room-code-display').textContent = room.id;
+  const isHost = room.host === mySid;
+  document.getElementById('btn-start').classList.toggle('hidden', !isHost);
+
   const container = document.getElementById('waiting-players');
   container.innerHTML = '';
-
-  // Mode badge
-  const modeBadge = document.getElementById('waiting-mode-badge');
-  if (modeBadge) {
-    const isKS = roomState.mode === 'king_slave';
-    modeBadge.textContent = isKS ? '👑 Mode King & Slave' : '🃏 Mode Capsa Biasa';
-    modeBadge.style.display = '';
-  }
-
   for (let i = 0; i < 4; i++) {
+    const p = room.players[i];
     const slot = document.createElement('div');
-    const p = roomState.players[i];
     if (p) {
       slot.className = `player-slot${p.ready ? ' ready' : ''}`;
       slot.innerHTML = `
-        <div class="player-slot-name">${escHtml(p.name)}${p.id === myId ? ' (Kamu)' : ''}</div>
+        <div class="player-slot-name">${esc(p.name)}${p.sid === mySid ? ' (Kamu)' : ''}</div>
         <div class="player-slot-status">${p.ready ? '✅ Siap' : 'Menunggu...'}</div>
       `;
     } else {
@@ -277,235 +226,217 @@ function renderWaiting() {
     }
     container.appendChild(slot);
   }
-
-  document.getElementById('btn-start').classList.toggle('hidden', !myIsHost);
-  document.getElementById('room-code-display').textContent = roomId;
 }
 
-// ── Socket Setup ───────────────────────────────────────────────────────────────
-function initSocket() {
-  socket = io(SERVER_URL);
-
-  socket.on('connect', () => {
-    myId = socket.id;
-    console.log('Connected as', myId);
-  });
-
-  socket.on('room_created', ({ roomId: rid }) => {
-    roomId = rid;
-    myIsHost = true;
-    showScreen('screen-waiting');
-    document.getElementById('room-code-display').textContent = rid;
-  });
-
-  socket.on('room_update', (room) => {
-    roomState = room;
-    myIsHost = room.host === myId;
-
-    if (room.state === 'waiting') {
-      showScreen('screen-waiting');
-      document.getElementById('room-code-display').textContent = room.id;
-      renderWaiting();
-    } else if (room.state === 'playing' || room.state === 'card_exchange') {
-      showScreen('screen-game');
-      renderAll();
-    } else if (room.state === 'round_end') {
-      showScreen('screen-game');
-      renderAll();
-    }
-  });
-
-  socket.on('game_started', ({ firstPlayer, roundNum }) => {
-    showScreen('screen-game');
-    clearSelection();
-    addChatSystem(`Ronde ${roundNum} dimulai!`);
-    if (firstPlayer === myId) showToast('Kamu main pertama! Wajib pakai 3♦');
-  });
-
-  socket.on('cards_played', ({ playerId, cards, combo }) => {
-    const name = getPlayerName(playerId);
-    const comboName = comboLabel(combo?.type);
-    addChatSystem(`${name} main ${comboName}`);
-    renderAll();
-  });
-
-  socket.on('player_passed', ({ playerId }) => {
-    const name = getPlayerName(playerId);
-    addChatSystem(`${name} pass`);
-    renderAll();
-  });
-
-  socket.on('table_cleared', () => {
-    addChatSystem('Meja dikosongkan — giliran baru dimulai');
-    renderAll();
-  });
-
-  socket.on('turn_changed', ({ currentTurn }) => {
-    if (currentTurn === myId) {
-      showToast('Giliran kamu! 🎯');
-    }
-    renderAll();
-  });
-
-  socket.on('player_finished', ({ playerId, position }) => {
-    const name = getPlayerName(playerId);
-    const pos = ['', 'Raja 👑', 'Menteri 🤵', 'Rakyat 🧑', 'Budak 🔗'][position] || '';
-    addChatSystem(`${name} selesai — ${pos}`);
-  });
-
-  socket.on('round_end', ({ positions, finishOrder, scores, mode }) => {
-    showRoundEnd(positions, finishOrder, scores, mode);
-  });
-
-  socket.on('player_joined', ({ name }) => {
-    if (roomState?.state === 'waiting') {
-      addChatSystem(`${name} bergabung`);
-    }
-  });
-
-  socket.on('player_left', ({ name }) => {
-    addChatSystem(`${name} keluar`);
-    renderAll();
-  });
-
-  socket.on('game_ended', ({ scores }) => {
-    document.getElementById('modal-round-end').classList.add('hidden');
-    addChatSystem('Game diakhiri oleh host');
-    showToast('Game selesai — kembali ke lobby...');
-    setTimeout(() => showScreen('screen-waiting'), 1500);
-  });
-
-  socket.on('error', ({ msg }) => {
-    showToast('⚠️ ' + msg);
-  });
-
-  socket.on('chat_message', ({ name, msg }) => {
-    addChatMsg(name, msg);
-  });
-}
-
-// ── Round End Modal ────────────────────────────────────────────────────────────
-function showRoundEnd(positions, finishOrder, scores, mode) {
-  const modal = document.getElementById('modal-round-end');
-  const posDiv = document.getElementById('modal-positions');
+// ── Round end modal ───────────────────────────────────────────────────────────
+function showRoundEnd(positions, finishOrder, scores) {
+  const modal   = document.getElementById('modal-round-end');
+  const posDiv  = document.getElementById('modal-positions');
   const scoreDiv = document.getElementById('modal-scores');
-  const isKS = mode === 'king_slave';
 
-  document.getElementById('modal-title').textContent = isKS ? 'Ronde Selesai! 👑' : 'Ronde Selesai! 🃏';
   modal.classList.remove('hidden');
-  document.getElementById('btn-end-game').style.display = myIsHost ? '' : 'none';
-  // Hide next round btn label based on mode
-  document.getElementById('btn-next-round').textContent = isKS
-    ? 'Lanjut (Tukar Kartu) ▶'
-    : 'Lanjut Ronde Berikutnya ▶';
+  document.getElementById('btn-end-game').classList.toggle('hidden', room?.host !== mySid);
 
-  const posOrder = ['king', 'minister', 'peasant', 'slave'];
   posDiv.innerHTML = '';
-
-  if (isKS) {
-    posOrder.forEach(pos => {
-      const pid = Object.keys(positions).find(id => positions[id] === pos);
-      if (!pid) return;
-      const name = getPlayerName(pid);
-      const row = document.createElement('div');
-      row.className = `pos-row ${pos}`;
-      row.innerHTML = `
-        <span class="pos-crown">${POS_EMOJI[pos]}</span>
-        <span class="pos-name">${escHtml(name)}${pid === myId ? ' (Kamu)' : ''}</span>
-        <span class="pos-label">${POS_LABEL[pos]}</span>
-      `;
-      posDiv.appendChild(row);
-    });
-  } else {
-    // Normal mode: show finish order
-    finishOrder.forEach((pid, i) => {
-      const name = getPlayerName(pid);
-      const medals = ['🥇', '🥈', '🥉', '4️⃣'];
-      const row = document.createElement('div');
-      row.className = `pos-row${i === 0 ? ' king' : i === finishOrder.length - 1 ? ' slave' : ''}`;
-      row.innerHTML = `
-        <span class="pos-crown">${medals[i] || (i+1)+'.'}</span>
-        <span class="pos-name">${escHtml(name)}${pid === myId ? ' (Kamu)' : ''}</span>
-        <span class="pos-label">${i === 0 ? 'Menang!' : 'Selesai ke-'+(i+1)}</span>
-      `;
-      posDiv.appendChild(row);
-    });
-  }
-
-  scoreDiv.innerHTML = `<strong style="color:var(--text-dim);letter-spacing:0.1em;font-size:0.8rem">${isKS ? 'SKOR TOTAL' : 'TOTAL MENANG'}</strong>`;
-  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-  sorted.forEach(([pid, score]) => {
-    const name = getPlayerName(pid);
-    const row = document.createElement('div');
-    row.className = 'score-row';
-    const label = isKS ? (score >= 0 ? '+' : '') + score : score + ' menang';
-    row.innerHTML = `<span>${escHtml(name)}</span><span class="score-val ${score >= 0 ? 'pos' : 'neg'}">${label}</span>`;
-    scoreDiv.appendChild(row);
+  finishOrder.forEach((sid, i) => {
+    const name = room?.players.find(p => p.sid === sid)?.name || sid;
+    const pos  = positions[sid] || 'slave';
+    const row  = document.createElement('div');
+    row.className = `pos-row ${pos}`;
+    row.innerHTML = `
+      <span class="pos-crown">${POS_EMOJI[pos]}</span>
+      <span class="pos-name">${esc(name)}${sid === mySid ? ' (Kamu)' : ''}</span>
+      <span class="pos-label">${POS_LABEL[pos]}</span>
+    `;
+    posDiv.appendChild(row);
   });
+
+  scoreDiv.innerHTML = '<strong style="color:var(--text-dim);font-size:0.78rem;letter-spacing:0.1em">TOTAL MENANG</strong>';
+  Object.entries(scores)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([sid, score]) => {
+      const name = room?.players.find(p => p.sid === sid)?.name || sid;
+      const row  = document.createElement('div');
+      row.className = 'score-row';
+      row.innerHTML = `<span>${esc(name)}</span><span class="score-val pos">${score} menang</span>`;
+      scoreDiv.appendChild(row);
+    });
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-function getPlayerName(id) {
-  if (!roomState) return id;
-  return roomState.players.find(p => p.id === id)?.name || id;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function comboLabel(type) {
-  const map = {
-    single: 'kartu tunggal', pair: 'pasangan', triple: 'tiga sejenis',
-    straight: 'straight', flush: 'flush', full_house: 'full house',
-    four_of_a_kind: 'four of a kind', bomb: 'bom', straight_flush: 'straight flush'
-  };
-  return map[type] || type || 'kartu';
+let toastTid;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTid);
+  toastTid = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
-let toastTimeout;
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-function addChatSystem(msg) {
+function chatSystem(msg) {
   const el = document.createElement('div');
   el.className = 'chat-system';
   el.textContent = msg;
   appendChat(el);
 }
 
-function addChatMsg(name, msg) {
+function chatMsg(name, msg) {
   const el = document.createElement('div');
   el.className = 'chat-msg';
-  el.innerHTML = `<span class="chat-name">${escHtml(name)}:</span> <span class="chat-text">${escHtml(msg)}</span>`;
+  el.innerHTML = `<span class="chat-name">${esc(name)}:</span> <span class="chat-text">${esc(msg)}</span>`;
   appendChat(el);
 }
 
 function appendChat(el) {
-  const msgs = document.getElementById('chat-messages');
-  if (!msgs) return;
-  msgs.appendChild(el);
-  msgs.scrollTop = msgs.scrollHeight;
+  const box = document.getElementById('chat-messages');
+  if (!box) return;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
 }
 
-function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function getName(sid) {
+  return room?.players.find(p => p.sid === sid)?.name || sid;
 }
 
-// ── Event Listeners ────────────────────────────────────────────────────────────
+function leaveRoom() {
+  socket.emit('leave_room');
+  room = null; roomId = null; selected = [];
+  document.getElementById('modal-round-end').classList.add('hidden');
+  document.getElementById('input-name').value = myName;
+  document.getElementById('input-room').value = '';
+  showScreen('screen-lobby');
+}
+
+// ── Socket init ───────────────────────────────────────────────────────────────
+function initSocket() {
+  socket = io(SERVER_URL, { reconnection: true, reconnectionDelay: 500 });
+
+  // ── Connection ──
+  socket.on('connect', () => {
+    myId = socket.id;
+    document.getElementById('overlay-reconnect').classList.add('hidden');
+    // Always register with stored sid (may be null for first visit)
+    socket.emit('register_session', { sid: getSid() });
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('overlay-reconnect').classList.remove('hidden');
+  });
+
+  // ── Session ──
+  socket.on('session_ok', ({ sid, roomId: restoredRoom, name }) => {
+    mySid = sid;
+    saveSid(sid);
+    if (restoredRoom) {
+      roomId = restoredRoom;
+      myName = name;
+      toast('✅ Koneksi dipulihkan!');
+      // room_update will follow and show the right screen
+    }
+  });
+
+  // ── Room state ──
+  socket.on('room_update', data => {
+    room = data;
+    if (room.state === 'waiting') {
+      showScreen('screen-waiting');
+      renderWaiting();
+    } else if (['playing','card_exchange','round_end'].includes(room.state)) {
+      showScreen('screen-game');
+      renderAll();
+    }
+  });
+
+  socket.on('room_created', ({ roomId: rid }) => {
+    roomId = rid;
+    showScreen('screen-waiting');
+  });
+
+  // ── Game events ──
+  socket.on('game_started', ({ firstSid, roundNum }) => {
+    selected = [];
+    chatSystem(`Ronde ${roundNum} dimulai!`);
+    if (firstSid === mySid) toast('🎯 Kamu main pertama! Wajib pakai 3♦');
+    showScreen('screen-game');
+  });
+
+  socket.on('turn_changed', ({ currentTurn }) => {
+    if (room) room.currentTurn = currentTurn;
+    updateButtons();
+    if (currentTurn === mySid) toast('🎯 Giliran kamu!');
+    renderOpponents();
+  });
+
+  socket.on('cards_played', ({ playerSid, combo }) => {
+    chatSystem(`${getName(playerSid)} main ${COMBO_LABEL[combo?.type] || ''}`);
+  });
+
+  socket.on('player_passed', ({ playerSid }) => {
+    chatSystem(`${getName(playerSid)} pass`);
+  });
+
+  socket.on('table_cleared', () => {
+    chatSystem('Meja dikosongkan');
+  });
+
+  socket.on('player_finished', ({ playerSid, position }) => {
+    const medals = ['','🥇','🥈','🥉','4️⃣'];
+    chatSystem(`${getName(playerSid)} selesai ${medals[position] || position}`);
+  });
+
+  socket.on('round_end', ({ positions, finishOrder, scores }) => {
+    if (room) { room.positions = positions; room.scores = scores; }
+    showRoundEnd(positions, finishOrder, scores);
+  });
+
+  socket.on('game_ended', () => {
+    document.getElementById('modal-round-end').classList.add('hidden');
+    toast('Game selesai!');
+    setTimeout(() => showScreen('screen-waiting'), 800);
+  });
+
+  socket.on('player_joined', ({ name }) => {
+    chatSystem(`${name} bergabung`);
+  });
+
+  socket.on('player_left', ({ name }) => {
+    chatSystem(`${name} keluar`);
+  });
+
+  socket.on('player_reconnected', ({ name }) => {
+    chatSystem(`✅ ${name} kembali terhubung`);
+  });
+
+  socket.on('player_disconnected', ({ name, reconnectSecs }) => {
+    chatSystem(`⚠️ ${name} terputus — ${reconnectSecs}s untuk reconnect`);
+  });
+
+  socket.on('error', ({ msg }) => {
+    toast('⚠️ ' + msg);
+  });
+
+  socket.on('chat_message', ({ name, msg }) => {
+    chatMsg(name, msg);
+  });
+}
+
+// ── UI Event Listeners ────────────────────────────────────────────────────────
 document.getElementById('btn-create').addEventListener('click', () => {
   const name = document.getElementById('input-name').value.trim();
-  if (!name) { showToast('Masukkan nama dulu!'); return; }
+  if (!name) { toast('Masukkan nama dulu!'); return; }
   myName = name;
-  socket.emit('create_room', { name, mode: selectedMode });
+  socket.emit('create_room', { name });
 });
 
 document.getElementById('btn-join').addEventListener('click', () => {
   const name = document.getElementById('input-name').value.trim();
   const code = document.getElementById('input-room').value.trim().toUpperCase();
-  if (!name) { showToast('Masukkan nama dulu!'); return; }
-  if (!code) { showToast('Masukkan kode room!'); return; }
+  if (!name) { toast('Masukkan nama dulu!'); return; }
+  if (!code) { toast('Masukkan kode room!'); return; }
   myName = name;
   roomId = code;
   socket.emit('join_room', { roomId: code, name });
@@ -514,7 +445,6 @@ document.getElementById('btn-join').addEventListener('click', () => {
 document.getElementById('input-name').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btn-create').click();
 });
-
 document.getElementById('input-room').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btn-join').click();
 });
@@ -522,19 +452,19 @@ document.getElementById('input-room').addEventListener('keydown', e => {
 document.getElementById('btn-ready').addEventListener('click', () => {
   socket.emit('set_ready');
 });
-
 document.getElementById('btn-start').addEventListener('click', () => {
   socket.emit('start_game');
 });
+document.getElementById('btn-waiting-leave').addEventListener('click', leaveRoom);
 
 document.getElementById('btn-copy-code').addEventListener('click', () => {
-  navigator.clipboard.writeText(roomId).then(() => showToast('Kode disalin!'));
+  const code = document.getElementById('room-code-display').textContent;
+  navigator.clipboard.writeText(code).then(() => toast('Kode disalin!'));
 });
 
 document.getElementById('btn-play').addEventListener('click', () => {
-  if (selectedCards.length === 0) return;
-  const hand = roomState.hands[myId] || [];
-  const cards = hand.filter(c => selectedCards.includes(c.id));
+  if (!selected.length) return;
+  const cards = (room?.myHand || []).filter(c => selected.includes(c.id));
   socket.emit('play_cards', { cards });
   clearSelection();
 });
@@ -545,52 +475,35 @@ document.getElementById('btn-pass').addEventListener('click', () => {
 });
 
 document.getElementById('btn-clear-sel').addEventListener('click', clearSelection);
+document.getElementById('btn-game-leave').addEventListener('click', () => {
+  if (confirm('Keluar dari game?')) leaveRoom();
+});
 
 document.getElementById('btn-next-round').addEventListener('click', () => {
   document.getElementById('modal-round-end').classList.add('hidden');
   socket.emit('ready_next_round');
 });
-
 document.getElementById('btn-end-game').addEventListener('click', () => {
-  if (!confirm('Akhiri game dan kembali ke waiting room?')) return;
+  if (!confirm('Akhiri game?')) return;
   document.getElementById('modal-round-end').classList.add('hidden');
   socket.emit('end_game');
 });
-
 document.getElementById('btn-leave-room').addEventListener('click', () => {
   if (!confirm('Keluar dari room?')) return;
-  document.getElementById('modal-round-end').classList.add('hidden');
   leaveRoom();
 });
-
-document.getElementById('btn-game-leave').addEventListener('click', () => {
-  if (!confirm('Keluar dari game?')) return;
-  leaveRoom();
-});
-
-function leaveRoom() {
-  socket.emit('leave_room');
-  roomId = null;
-  roomState = null;
-  myIsHost = false;
-  selectedCards = [];
-  document.getElementById('input-name').value = myName;
-  document.getElementById('input-room').value = '';
-  showScreen('screen-lobby');
-}
 
 document.getElementById('btn-send-chat').addEventListener('click', sendChat);
 document.getElementById('chat-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') sendChat();
 });
-
 function sendChat() {
-  const input = document.getElementById('chat-input');
-  const msg = input.value.trim();
+  const el = document.getElementById('chat-input');
+  const msg = el.value.trim();
   if (!msg) return;
   socket.emit('send_chat', { msg });
-  input.value = '';
+  el.value = '';
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────────
+// ── Boot ──────────────────────────────────────────────────────────────────────
 initSocket();
