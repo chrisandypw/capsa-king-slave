@@ -6,32 +6,30 @@ const path = require('path');
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-  cors: { origin: '*' }
-});
+const io = new Server(httpServer, { cors: { origin: '*' } });
 
 app.use(express.static(path.join(__dirname, '../public')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
-});
+app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
 
-// ─── Game State ───────────────────────────────────────────────────────────────
-const rooms = {}; // roomId -> Room
-
-const SUITS = ['d', 'c', 'h', 's']; // diamonds, clubs, hearts, spades
+// ── Constants ──────────────────────────────────────────────────────────────────
+const SUITS = ['d', 'c', 'h', 's'];
 const RANKS = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+const SESSION_TTL = 10 * 60 * 1000;
+const AUTO_PASS_DELAY = 15 * 1000;
+
+// ── Card helpers ───────────────────────────────────────────────────────────────
+const cardVal = c => RANKS.indexOf(c.rank) * 4 + SUITS.indexOf(c.suit);
+const sortCards = cards => [...cards].sort((a, b) => cardVal(a) - cardVal(b));
 
 function createDeck() {
-  const deck = [];
-  for (const rank of RANKS) {
-    for (const suit of SUITS) {
-      deck.push({ rank, suit, id: `${rank}${suit}` });
-    }
-  }
-  return deck;
+  const d = [];
+  for (const rank of RANKS)
+    for (const suit of SUITS)
+      d.push({ rank, suit, id: `${rank}${suit}` });
+  return d;
 }
 
-function shuffleDeck(deck) {
+function shuffle(deck) {
   const d = [...deck];
   for (let i = d.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -40,381 +38,348 @@ function shuffleDeck(deck) {
   return d;
 }
 
-function cardValue(card) {
-  return RANKS.indexOf(card.rank) * 4 + SUITS.indexOf(card.suit);
-}
-
-function sortCards(cards) {
-  return [...cards].sort((a, b) => cardValue(a) - cardValue(b));
-}
-
-function dealCards(deck, numPlayers) {
-  const hands = Array.from({ length: numPlayers }, () => []);
-  deck.forEach((card, i) => hands[i % numPlayers].push(card));
+function deal(deck, n) {
+  const hands = Array.from({ length: n }, () => []);
+  deck.forEach((c, i) => hands[i % n].push(c));
   return hands.map(sortCards);
 }
 
-// ─── Combination Validation ────────────────────────────────────────────────
-function getComboType(cards) {
-  if (!cards || cards.length === 0) return null;
-  const n = cards.length;
-  const sorted = sortCards(cards);
+// ── Combo validation ───────────────────────────────────────────────────────────
+const COMBO_RANK = {
+  single:1, pair:2, triple:3, straight:4,
+  flush:5, full_house:6, four_of_a_kind:7, bomb:8, straight_flush:9
+};
 
-  if (n === 1) return { type: 'single', value: cardValue(sorted[0]) };
+function getCombo(cards) {
+  if (!cards || !cards.length) return null;
+  const n = cards.length;
+  const s = sortCards(cards);
+
+  if (n === 1) return { type: 'single', value: cardVal(s[0]) };
 
   if (n === 2) {
-    if (sorted[0].rank === sorted[1].rank)
-      return { type: 'pair', value: cardValue(sorted[1]) };
+    if (s[0].rank === s[1].rank) return { type: 'pair', value: cardVal(s[1]) };
     return null;
   }
 
   if (n === 3) {
-    if (sorted[0].rank === sorted[1].rank && sorted[1].rank === sorted[2].rank)
-      return { type: 'triple', value: cardValue(sorted[2]) };
+    if (s[0].rank === s[1].rank && s[1].rank === s[2].rank)
+      return { type: 'triple', value: cardVal(s[2]) };
     return null;
   }
 
   if (n === 4) {
-    const rankCounts = {};
-    sorted.forEach(c => rankCounts[c.rank] = (rankCounts[c.rank] || 0) + 1);
-    const counts = Object.values(rankCounts);
-    if (counts.includes(4)) {
-      const quadRank = Object.keys(rankCounts).find(r => rankCounts[r] === 4);
-      return { type: 'four_of_a_kind', value: RANKS.indexOf(quadRank) * 4 + 3 };
+    const rc = {};
+    s.forEach(c => rc[c.rank] = (rc[c.rank] || 0) + 1);
+    if (Object.values(rc).includes(4)) {
+      const q = Object.keys(rc).find(r => rc[r] === 4);
+      return { type: 'four_of_a_kind', value: RANKS.indexOf(q) * 4 + 3 };
     }
     return null;
   }
 
   if (n === 5) {
-    const rankCounts = {};
-    sorted.forEach(c => rankCounts[c.rank] = (rankCounts[c.rank] || 0) + 1);
-    const counts = Object.values(rankCounts).sort((a, b) => b - a);
-    const ranks = sorted.map(c => RANKS.indexOf(c.rank));
-    const suits = sorted.map(c => c.suit);
-    const isFlush = suits.every(s => s === suits[0]);
-    const ranksSorted = [...ranks].sort((a, b) => a - b);
-    const isStraight = ranksSorted.every((r, i) => i === 0 || r === ranksSorted[i-1] + 1);
+    const rc = {};
+    s.forEach(c => rc[c.rank] = (rc[c.rank] || 0) + 1);
+    const counts = Object.values(rc).sort((a, b) => b - a);
+    const ri = s.map(c => RANKS.indexOf(c.rank)).sort((a, b) => a - b);
+    const isFlush = s.every(c => c.suit === s[0].suit);
+    const isStraight = ri.every((r, i) => i === 0 || r === ri[i-1] + 1);
 
-    if (isFlush && isStraight)
-      return { type: 'straight_flush', value: cardValue(sorted[4]) };
-
+    if (isFlush && isStraight) return { type: 'straight_flush', value: cardVal(s[4]) };
     if (counts[0] === 4) {
-      const quadRank = Object.keys(rankCounts).find(r => rankCounts[r] === 4);
-      return { type: 'bomb', value: RANKS.indexOf(quadRank) * 10 + 1000 };
+      const q = Object.keys(rc).find(r => rc[r] === 4);
+      return { type: 'bomb', value: RANKS.indexOf(q) * 10 + 1000 };
     }
-
     if (counts[0] === 3 && counts[1] === 2) {
-      const triRank = Object.keys(rankCounts).find(r => rankCounts[r] === 3);
-      return { type: 'full_house', value: RANKS.indexOf(triRank) * 10 + 500 };
+      const t = Object.keys(rc).find(r => rc[r] === 3);
+      return { type: 'full_house', value: RANKS.indexOf(t) * 10 + 500 };
     }
-
-    if (isFlush)
-      return { type: 'flush', value: cardValue(sorted[4]) * 10 + suits.filter(s => s === suits[0]).length };
-
-    if (isStraight)
-      return { type: 'straight', value: cardValue(sorted[4]) };
-
+    if (isFlush) return { type: 'flush', value: cardVal(s[4]) };
+    if (isStraight) return { type: 'straight', value: cardVal(s[4]) };
     return null;
   }
-
   return null;
 }
 
-const COMBO_RANK = {
-  'single': 1, 'pair': 2, 'triple': 3,
-  'straight': 4, 'flush': 5, 'full_house': 6,
-  'four_of_a_kind': 7, 'bomb': 8, 'straight_flush': 9
-};
-
 function isValidPlay(cards, lastPlay) {
-  const combo = getComboType(cards);
-  if (!combo) return { valid: false, reason: 'Kombinasi kartu tidak valid' };
+  const combo = getCombo(cards);
+  if (!combo) return { valid: false, reason: 'Kombinasi tidak valid' };
+  if (!lastPlay || !lastPlay.length) return { valid: true, combo };
 
-  if (!lastPlay || lastPlay.length === 0) return { valid: true, combo };
+  const last = getCombo(lastPlay);
+  if (!last) return { valid: true, combo };
 
-  const lastCombo = getComboType(lastPlay);
-  if (!lastCombo) return { valid: true, combo };
-
-  // bombs beat everything except higher bombs/straight flushes
   if (combo.type === 'bomb' || combo.type === 'straight_flush') {
-    if (lastCombo.type === 'bomb' || lastCombo.type === 'straight_flush') {
-      if (COMBO_RANK[combo.type] > COMBO_RANK[lastCombo.type]) return { valid: true, combo };
-      if (combo.type === lastCombo.type && combo.value > lastCombo.value) return { valid: true, combo };
-      return { valid: false, reason: 'Nilai kartu terlalu kecil' };
+    if (last.type === 'bomb' || last.type === 'straight_flush') {
+      if (COMBO_RANK[combo.type] > COMBO_RANK[last.type]) return { valid: true, combo };
+      if (combo.type === last.type && combo.value > last.value) return { valid: true, combo };
+      return { valid: false, reason: 'Nilai terlalu kecil' };
     }
     return { valid: true, combo };
   }
 
-  if (combo.type !== lastCombo.type)
-    return { valid: false, reason: `Harus main ${lastCombo.type}` };
-
-  if (cards.length !== lastPlay.length)
-    return { valid: false, reason: 'Jumlah kartu harus sama' };
-
-  if (combo.value > lastCombo.value) return { valid: true, combo };
-  return { valid: false, reason: 'Nilai kartu terlalu kecil' };
+  if (combo.type !== last.type) return { valid: false, reason: `Harus main ${last.type}` };
+  if (cards.length !== lastPlay.length) return { valid: false, reason: 'Jumlah kartu harus sama' };
+  if (combo.value > last.value) return { valid: true, combo };
+  return { valid: false, reason: 'Nilai terlalu kecil' };
 }
 
-// ─── Room Management ───────────────────────────────────────────────────────
-function createRoom(roomId, hostId, hostName) {
-  return {
-    id: roomId,
-    host: hostId,
-    players: [{ id: hostId, name: hostName, ready: false }],
-    state: 'waiting', // waiting | card_exchange | playing | round_end
-    deck: [],
-    hands: {},
-    currentTurn: null,
-    lastPlay: [],
-    lastPlayerId: null,
-    passCount: 0,
-    positions: {}, // king, minister, peasant, slave
-    exchangePending: {}, // for king-slave card exchange
-    exchangeDone: {},
-    turnOrder: [],
-    scores: {},
-    roundNum: 1,
-    chat: []
-  };
+// ── Stores ─────────────────────────────────────────────────────────────────────
+const sessions = {}; // sid -> { name, roomId, disconnectedAt }
+const rooms    = {}; // roomId -> Room
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function getSocketBySid(sid) {
+  for (const [, sock] of io.sockets.sockets)
+    if (sock.data.sid === sid) return sock;
+  return null;
 }
 
 function broadcastRoom(roomId) {
   const room = rooms[roomId];
   if (!room) return;
-  // Send each player their own hand (private), shared state to all
   room.players.forEach(p => {
-    const socket = io.sockets.sockets.get(p.id);
-    if (!socket) return;
-    socket.emit('room_update', {
-      ...room,
-      hands: { [p.id]: room.hands[p.id] || [] }, // only own hand
+    const sock = getSocketBySid(p.sid);
+    if (!sock) return;
+    sock.emit('room_update', {
+      id: room.id,
+      host: room.host,
+      state: room.state,
+      players: room.players,
+      currentTurn: room.currentTurn,
+      lastPlay: room.lastPlay,
+      lastPlayerId: room.lastPlayerId,
+      positions: room.positions,
+      scores: room.scores,
+      roundNum: room.roundNum,
+      finishOrder: room.finishOrder || [],
+      exchangeDone: room.exchangeDone || {},
+      myHand: room.hands[p.sid] || [],
       allHandCounts: Object.fromEntries(
-        Object.entries(room.hands).map(([pid, h]) => [pid, h.length])
+        Object.entries(room.hands).map(([k, h]) => [k, h.length])
       )
     });
   });
-}
-
-function startGame(roomId) {
-  const room = rooms[roomId];
-  const players = room.players;
-  const n = players.length;
-
-  const deck = shuffleDeck(createDeck());
-  const dealtHands = dealCards(deck, n);
-
-  room.hands = {};
-  players.forEach((p, i) => room.hands[p.id] = dealtHands[i]);
-  room.deck = deck;
-  room.lastPlay = [];
-  room.lastPlayerId = null;
-  room.passCount = 0;
-
-  // Find who has 3♦ - they go first
-  let firstPlayer = players[0].id;
-  players.forEach(p => {
-    if (room.hands[p.id].some(c => c.rank === '3' && c.suit === 'd')) {
-      firstPlayer = p.id;
-    }
-  });
-
-  // Set turn order starting from firstPlayer
-  const firstIdx = players.findIndex(p => p.id === firstPlayer);
-  room.turnOrder = [
-    ...players.slice(firstIdx).map(p => p.id),
-    ...players.slice(0, firstIdx).map(p => p.id)
-  ];
-  room.currentTurn = firstPlayer;
-  room.state = 'playing';
-  room.finishOrder = [];
-
-  broadcastRoom(roomId);
-  io.to(roomId).emit('game_started', { firstPlayer, roundNum: room.roundNum });
-}
-
-function doCardExchange(roomId) {
-  const room = rooms[roomId];
-  if (room.state !== 'card_exchange') return;
-
-  const positions = room.positions;
-  const findId = pos => Object.keys(positions).find(id => positions[id] === pos);
-  
-  const kingId = findId('king');
-  const ministerId = findId('minister');
-  const peasantId = findId('peasant');
-  const slaveId = findId('slave');
-
-  const hasAll = kingId && ministerId && peasantId && slaveId;
-  const allDone = room.players.every(p => room.exchangeDone[p.id]);
-
-  if (!hasAll || !allDone) return;
-
-  // King gets 2 best from Slave, Slave gets 2 worst from King
-  const slaveHand = sortCards(room.hands[slaveId]);
-  const kingHand = sortCards(room.hands[kingId]);
-  const ministHand = sortCards(room.hands[ministerId]);
-  const peasHand = sortCards(room.hands[peasantId]);
-
-  const slaveBest2 = slaveHand.slice(-2);
-  const kingWorst2 = kingHand.slice(0, 2);
-  const minBest1 = ministHand.slice(-1);
-  const peasWorst1 = peasHand.slice(0, 1);
-
-  // Remove exchanged cards
-  room.hands[slaveId] = slaveHand.filter(c => !slaveBest2.find(x => x.id === c.id));
-  room.hands[slaveId] = sortCards([...room.hands[slaveId], ...kingWorst2]);
-
-  room.hands[kingId] = kingHand.filter(c => !kingWorst2.find(x => x.id === c.id));
-  room.hands[kingId] = sortCards([...room.hands[kingId], ...slaveBest2]);
-
-  room.hands[ministerId] = ministHand.filter(c => !minBest1.find(x => x.id === c.id));
-  room.hands[ministerId] = sortCards([...room.hands[ministerId], ...peasWorst1]);
-
-  room.hands[peasantId] = peasHand.filter(c => !peasWorst1.find(x => x.id === c.id));
-  room.hands[peasantId] = sortCards([...room.hands[peasantId], ...minBest1]);
-
-  // Start new round
-  room.roundNum++;
-  startGame(roomId);
 }
 
 function nextTurn(room) {
   const order = room.turnOrder;
   const idx = order.indexOf(room.currentTurn);
   let next = (idx + 1) % order.length;
-  // Skip players who already finished
   let tries = 0;
-  while (room.finishOrder.includes(order[next]) && tries < order.length) {
+  while ((room.finishOrder || []).includes(order[next]) && tries < order.length) {
     next = (next + 1) % order.length;
     tries++;
   }
   room.currentTurn = order[next];
 }
 
-function checkRoundEnd(room) {
-  const activePlayers = room.players.filter(p => !room.finishOrder.includes(p.id));
-  if (activePlayers.length <= 1) {
-    // Last player is the slave
-    if (activePlayers.length === 1) {
-      room.finishOrder.push(activePlayers[0].id);
-    }
+function startGame(roomId) {
+  const room = rooms[roomId];
+  const players = room.players;
+  const hands = deal(shuffle(createDeck()), players.length);
 
-    const posLabels = ['king', 'minister', 'peasant', 'slave'];
-    room.positions = {};
-    room.finishOrder.forEach((id, i) => {
-      room.positions[id] = posLabels[i] || 'slave';
-    });
+  room.hands = {};
+  players.forEach((p, i) => room.hands[p.sid] = hands[i]);
+  room.lastPlay = [];
+  room.lastPlayerId = null;
+  room.passCount = 0;
+  room.finishOrder = [];
 
-    // Update scores
-    room.players.forEach(p => {
-      if (!room.scores[p.id]) room.scores[p.id] = 0;
-      const pos = room.positions[p.id];
-      if (pos === 'king') room.scores[p.id] += 3;
-      else if (pos === 'minister') room.scores[p.id] += 1;
-      else if (pos === 'peasant') room.scores[p.id] -= 1;
-      else if (pos === 'slave') room.scores[p.id] -= 3;
-    });
+  let firstSid = players[0].sid;
+  players.forEach(p => {
+    if (room.hands[p.sid].some(c => c.rank === '3' && c.suit === 'd')) firstSid = p.sid;
+  });
 
-    room.state = 'round_end';
-    room.exchangeDone = {};
-    room.exchangePending = {};
+  const fi = players.findIndex(p => p.sid === firstSid);
+  room.turnOrder = [
+    ...players.slice(fi).map(p => p.sid),
+    ...players.slice(0, fi).map(p => p.sid)
+  ];
+  room.currentTurn = firstSid;
+  room.state = 'playing';
 
-    broadcastRoom(room.id);
-    io.to(room.id).emit('round_end', {
-      positions: room.positions,
-      finishOrder: room.finishOrder,
-      scores: room.scores
-    });
-    return true;
-  }
-  return false;
+  broadcastRoom(roomId);
+  io.to(roomId).emit('game_started', { firstSid, roundNum: room.roundNum });
 }
 
-// ─── Socket Events ──────────────────────────────────────────────────────────
-io.on('connection', (socket) => {
-  console.log('connected:', socket.id);
+function checkRoundEnd(room) {
+  const active = room.players.filter(p => !(room.finishOrder || []).includes(p.sid));
+  if (active.length > 1) return false;
+
+  if (active.length === 1) room.finishOrder.push(active[0].sid);
+
+  const labels = ['king','minister','peasant','slave'];
+  room.positions = {};
+  room.finishOrder.forEach((sid, i) => { room.positions[sid] = labels[i] || 'slave'; });
+
+  // Capsa biasa: count wins
+  room.players.forEach(p => {
+    if (!room.scores[p.sid]) room.scores[p.sid] = 0;
+    if (room.positions[p.sid] === 'king') room.scores[p.sid]++;
+  });
+
+  room.state = 'round_end';
+  room.exchangeDone = {};
+
+  broadcastRoom(room.id);
+  io.to(room.id).emit('round_end', {
+    positions: room.positions,
+    finishOrder: room.finishOrder,
+    scores: room.scores
+  });
+  return true;
+}
+
+function removeFromRoom(sid, roomId, kicked = false) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const name = sessions[sid]?.name || '?';
+
+  room.players = room.players.filter(p => p.sid !== sid);
+  delete room.hands[sid];
+  room.turnOrder = (room.turnOrder || []).filter(id => id !== sid);
+  if (room.finishOrder) room.finishOrder = room.finishOrder.filter(id => id !== sid);
+
+  if (room.players.length === 0) { delete rooms[roomId]; return; }
+  if (room.host === sid) room.host = room.players[0].sid;
+
+  if (kicked) io.to(roomId).emit('player_left', { sid, name });
+
+  // If it was their turn, advance
+  if (room.state === 'playing' && room.currentTurn === sid) {
+    if (room.turnOrder.length > 0) {
+      nextTurn(room);
+      io.to(roomId).emit('turn_changed', { currentTurn: room.currentTurn });
+    }
+  }
+  broadcastRoom(roomId);
+}
+
+// Purge expired disconnected sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, s] of Object.entries(sessions)) {
+    if (s.disconnectedAt && now - s.disconnectedAt > SESSION_TTL) {
+      if (s.roomId) removeFromRoom(sid, s.roomId, true);
+      delete sessions[sid];
+    }
+  }
+}, 30_000);
+
+// ── Socket events ──────────────────────────────────────────────────────────────
+io.on('connection', socket => {
+  socket.on('register_session', ({ sid }) => {
+    const existing = sid && sessions[sid];
+
+    if (existing && existing.roomId && rooms[existing.roomId]) {
+      const room = rooms[existing.roomId];
+      const player = room.players.find(p => p.sid === sid);
+      if (player) {
+        socket.join(existing.roomId);
+        socket.data.sid = sid;
+        socket.data.roomId = existing.roomId;
+        socket.data.name = existing.name;
+        existing.disconnectedAt = null;
+
+        io.to(existing.roomId).emit('player_reconnected', { name: existing.name });
+        broadcastRoom(existing.roomId);
+        socket.emit('session_ok', { sid, roomId: existing.roomId, name: existing.name });
+        return;
+      }
+    }
+
+    // New or expired session
+    const newSid = uuidv4();
+    sessions[newSid] = { name: '', roomId: null, disconnectedAt: null };
+    socket.data.sid = newSid;
+    socket.emit('session_ok', { sid: newSid, roomId: null, name: '' });
+  });
 
   socket.on('create_room', ({ name }) => {
+    const { sid } = socket.data;
+    if (!sid) return;
     const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-    rooms[roomId] = createRoom(roomId, socket.id, name);
-    socket.join(roomId);
-    socket.data.roomId = roomId;
+
+    sessions[sid] = { name, roomId, disconnectedAt: null };
     socket.data.name = name;
+    socket.data.roomId = roomId;
+
+    rooms[roomId] = {
+      id: roomId, host: sid, state: 'waiting',
+      players: [{ sid, name, ready: false }],
+      hands: {}, currentTurn: null,
+      lastPlay: [], lastPlayerId: null, passCount: 0,
+      turnOrder: [], finishOrder: [],
+      positions: {}, exchangeDone: {}, scores: {},
+      roundNum: 1, chat: []
+    };
+
+    socket.join(roomId);
     socket.emit('room_created', { roomId });
     broadcastRoom(roomId);
   });
 
   socket.on('join_room', ({ roomId, name }) => {
+    const { sid } = socket.data;
+    if (!sid) return;
     const room = rooms[roomId];
     if (!room) return socket.emit('error', { msg: 'Room tidak ditemukan' });
     if (room.state !== 'waiting') return socket.emit('error', { msg: 'Game sudah dimulai' });
     if (room.players.length >= 4) return socket.emit('error', { msg: 'Room penuh (maks 4 pemain)' });
-    if (room.players.find(p => p.id === socket.id)) return;
+    if (room.players.find(p => p.sid === sid)) return;
 
-    room.players.push({ id: socket.id, name, ready: false });
-    socket.join(roomId);
-    socket.data.roomId = roomId;
+    sessions[sid] = { name, roomId, disconnectedAt: null };
     socket.data.name = name;
+    socket.data.roomId = roomId;
 
-    io.to(roomId).emit('player_joined', { id: socket.id, name });
+    room.players.push({ sid, name, ready: false });
+    socket.join(roomId);
+    io.to(roomId).emit('player_joined', { sid, name });
     broadcastRoom(roomId);
   });
 
   socket.on('set_ready', () => {
-    const roomId = socket.data.roomId;
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
     if (!room) return;
-    const player = room.players.find(p => p.id === socket.id);
-    if (player) player.ready = !player.ready;
-    broadcastRoom(roomId);
+    const p = room.players.find(p => p.sid === sid);
+    if (p) { p.ready = !p.ready; broadcastRoom(roomId); }
   });
 
   socket.on('start_game', () => {
-    const roomId = socket.data.roomId;
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
-    if (!room || room.host !== socket.id) return;
+    if (!room || room.host !== sid) return;
     if (room.players.length < 2) return socket.emit('error', { msg: 'Minimal 2 pemain' });
     startGame(roomId);
   });
 
   socket.on('play_cards', ({ cards }) => {
-    const roomId = socket.data.roomId;
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
     if (!room || room.state !== 'playing') return;
-    if (room.currentTurn !== socket.id) return socket.emit('error', { msg: 'Bukan giliran kamu' });
+    if (room.currentTurn !== sid) return socket.emit('error', { msg: 'Bukan giliran kamu' });
 
-    const hand = room.hands[socket.id];
-    // Verify cards are in hand
-    for (const card of cards) {
-      if (!hand.find(c => c.id === card.id)) return socket.emit('error', { msg: 'Kartu tidak valid' });
-    }
+    const hand = room.hands[sid];
+    for (const c of cards)
+      if (!hand.find(h => h.id === c.id)) return socket.emit('error', { msg: 'Kartu tidak valid' });
 
     const result = isValidPlay(cards, room.lastPlay);
     if (!result.valid) return socket.emit('error', { msg: result.reason });
 
-    // Remove cards from hand
-    room.hands[socket.id] = hand.filter(c => !cards.find(x => x.id === c.id));
+    room.hands[sid] = hand.filter(c => !cards.find(x => x.id === c.id));
     room.lastPlay = cards;
-    room.lastPlayerId = socket.id;
+    room.lastPlayerId = sid;
     room.passCount = 0;
 
-    io.to(roomId).emit('cards_played', {
-      playerId: socket.id,
-      cards,
-      combo: result.combo
-    });
+    io.to(roomId).emit('cards_played', { playerSid: sid, cards, combo: result.combo });
 
-    // Check if this player finished
-    if (room.hands[socket.id].length === 0) {
-      room.finishOrder.push(socket.id);
-      io.to(roomId).emit('player_finished', {
-        playerId: socket.id,
-        position: room.finishOrder.length
-      });
-
+    if (room.hands[sid].length === 0) {
+      room.finishOrder.push(sid);
+      io.to(roomId).emit('player_finished', { playerSid: sid, position: room.finishOrder.length });
       if (checkRoundEnd(room)) return;
-
-      // Reset table if player who finished was last to play
       room.lastPlay = [];
       room.lastPlayerId = null;
     }
@@ -425,24 +390,19 @@ io.on('connection', (socket) => {
   });
 
   socket.on('pass_turn', () => {
-    const roomId = socket.data.roomId;
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
     if (!room || room.state !== 'playing') return;
-    if (room.currentTurn !== socket.id) return socket.emit('error', { msg: 'Bukan giliran kamu' });
-    if (room.lastPlay.length === 0) return socket.emit('error', { msg: 'Tidak bisa pass di awal giliran' });
+    if (room.currentTurn !== sid) return socket.emit('error', { msg: 'Bukan giliran kamu' });
+    if (!room.lastPlay.length) return socket.emit('error', { msg: 'Tidak bisa pass di awal ronde' });
 
     room.passCount++;
-    io.to(roomId).emit('player_passed', { playerId: socket.id });
+    io.to(roomId).emit('player_passed', { playerSid: sid });
 
-    // Count active players
-    const activePlayers = room.players.filter(p => !room.finishOrder.includes(p.id));
-    
-    // If all other active players passed, clear the table
-    if (room.passCount >= activePlayers.length - 1) {
-      room.lastPlay = [];
-      room.lastPlayerId = null;
-      room.passCount = 0;
-      io.to(roomId).emit('table_cleared', { nextPlayer: room.lastPlayerId || socket.id });
+    const active = room.players.filter(p => !(room.finishOrder || []).includes(p.sid));
+    if (room.passCount >= active.length - 1) {
+      room.lastPlay = []; room.lastPlayerId = null; room.passCount = 0;
+      io.to(roomId).emit('table_cleared');
     }
 
     nextTurn(room);
@@ -451,56 +411,96 @@ io.on('connection', (socket) => {
   });
 
   socket.on('ready_next_round', () => {
-    const roomId = socket.data.roomId;
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
     if (!room || room.state !== 'round_end') return;
-    room.exchangeDone[socket.id] = true;
+    room.exchangeDone[sid] = true;
     broadcastRoom(roomId);
 
-    if (room.players.every(p => room.exchangeDone[p.id])) {
-      room.state = 'card_exchange';
-      broadcastRoom(roomId);
-      doCardExchange(roomId);
+    const connected = room.players.filter(p => getSocketBySid(p.sid));
+    if (connected.every(p => room.exchangeDone[p.sid])) {
+      room.roundNum++;
+      startGame(roomId);
     }
   });
 
-  socket.on('send_chat', ({ msg }) => {
-    const roomId = socket.data.roomId;
+  socket.on('end_game', () => {
+    const { sid, roomId } = socket.data;
     const room = rooms[roomId];
-    if (!room) return;
-    const name = socket.data.name || 'Unknown';
-    const chatMsg = { name, msg, time: Date.now() };
-    room.chat.push(chatMsg);
-    if (room.chat.length > 50) room.chat.shift();
+    if (!room || room.host !== sid) return;
+    io.to(roomId).emit('game_ended', { scores: room.scores });
+    Object.assign(room, {
+      state: 'waiting', hands: {}, lastPlay: [], lastPlayerId: null,
+      passCount: 0, positions: {}, exchangeDone: {}, finishOrder: [],
+      turnOrder: [], currentTurn: null, scores: {}, roundNum: 1
+    });
+    room.players.forEach(p => p.ready = false);
+    broadcastRoom(roomId);
+  });
+
+  socket.on('leave_room', () => {
+    const { sid, roomId } = socket.data;
+    if (!roomId || !rooms[roomId]) return;
+    socket.leave(roomId);
+    socket.data.roomId = null;
+    if (sessions[sid]) sessions[sid].roomId = null;
+    removeFromRoom(sid, roomId, true);
+  });
+
+  socket.on('send_chat', ({ msg }) => {
+    const { roomId } = socket.data;
+    const room = rooms[roomId];
+    if (!room || !msg?.trim()) return;
+    const name = socket.data.name || '?';
+    const chatMsg = { name, msg: msg.trim(), time: Date.now() };
+    room.chat = [...(room.chat || []).slice(-49), chatMsg];
     io.to(roomId).emit('chat_message', chatMsg);
   });
 
   socket.on('disconnect', () => {
-    const roomId = socket.data.roomId;
-    if (!roomId || !rooms[roomId]) return;
-    const room = rooms[roomId];
-    room.players = room.players.filter(p => p.id !== socket.id);
-    delete room.hands[socket.id];
+    const { sid, roomId } = socket.data;
+    if (!sid) return;
 
-    if (room.players.length === 0) {
-      delete rooms[roomId];
+    if (!roomId || !rooms[roomId]) {
+      if (sessions[sid]) sessions[sid].disconnectedAt = Date.now();
       return;
     }
 
-    if (room.host === socket.id) room.host = room.players[0].id;
+    const room = rooms[roomId];
 
-    io.to(roomId).emit('player_left', { id: socket.id, name: socket.data.name });
-    if (room.state === 'playing') {
-      // If it was their turn, move on
-      if (room.currentTurn === socket.id) {
-        nextTurn(room);
-        io.to(roomId).emit('turn_changed', { currentTurn: room.currentTurn });
+    if (room.state === 'waiting') {
+      removeFromRoom(sid, roomId, true);
+      if (sessions[sid]) sessions[sid].roomId = null;
+    } else {
+      // Keep in game during SESSION_TTL window
+      if (sessions[sid]) sessions[sid].disconnectedAt = Date.now();
+      io.to(roomId).emit('player_disconnected', {
+        name: socket.data.name,
+        sid,
+        reconnectSecs: Math.floor(SESSION_TTL / 1000)
+      });
+
+      // Auto-pass if it's their turn
+      if (room.state === 'playing' && room.currentTurn === sid) {
+        setTimeout(() => {
+          const r = rooms[roomId];
+          if (!r || r.state !== 'playing' || r.currentTurn !== sid) return;
+          if (getSocketBySid(sid)) return; // reconnected already
+          r.passCount++;
+          io.to(roomId).emit('player_passed', { playerSid: sid });
+          const active = r.players.filter(p => !(r.finishOrder || []).includes(p.sid));
+          if (r.passCount >= active.length - 1) {
+            r.lastPlay = []; r.lastPlayerId = null; r.passCount = 0;
+            io.to(roomId).emit('table_cleared');
+          }
+          nextTurn(r);
+          broadcastRoom(roomId);
+          io.to(roomId).emit('turn_changed', { currentTurn: r.currentTurn });
+        }, AUTO_PASS_DELAY);
       }
-      room.turnOrder = room.turnOrder.filter(id => id !== socket.id);
     }
-    broadcastRoom(roomId);
   });
 });
 
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => console.log(`Capsa server running on port ${PORT}`));
+httpServer.listen(PORT, () => console.log(`Capsa server on :${PORT}`));
